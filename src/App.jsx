@@ -10,6 +10,8 @@ function App() {
   const [error, setError] = useState(null)
   const [editingTaskId, setEditingTaskId] = useState(null)
   const [editingTitle, setEditingTitle] = useState('')
+  const [testResults, setTestResults] = useState(null)
+  const [runningTests, setRunningTests] = useState(false)
 
   // Fetch tasks from Supabase
   const fetchTasks = async () => {
@@ -31,18 +33,8 @@ function App() {
     }
   }
 
-  // Create tasks table if it doesn't exist, then fetch tasks
   useEffect(() => {
-    const initAndFetch = async () => {
-      // Try to create the tasks table
-      const { error: tableError } = await supabase.rpc('create_tasks_table_if_not_exists')
-      
-      // If RPC doesn't work, the table might already exist
-      // Let's just try to fetch - if it fails, we'll show an error
-      await fetchTasks()
-    }
-    
-    initAndFetch()
+    fetchTasks()
   }, [])
 
   // Add a new task
@@ -156,6 +148,148 @@ function App() {
     }
   }
 
+  // Comprehensive Test Suite
+  const runComprehensiveTests = async () => {
+    setRunningTests(true)
+    setTestResults(null)
+    const results = []
+    const log = (test, status, message) => {
+      results.push({ test, status, message, timestamp: new Date().toISOTime() })
+      console.log(`[${status}] ${test}: ${message}`)
+    }
+
+    try {
+      // Test 1: Connection to Supabase
+      log('1. Supabase Connection', 'running', 'Testing connection...')
+      const { data: connTest, error: connError } = await supabase
+        .from('tasks')
+        .select('id')
+        .limit(1)
+      
+      if (connError) {
+        log('1. Supabase Connection', '❌ FAIL', connError.message)
+      } else {
+        log('1. Supabase Connection', '✅ PASS', 'Successfully connected to Supabase')
+      }
+
+      // Test 2: CREATE - Add a new task
+      log('2. CREATE Task', 'running', 'Creating a new task...')
+      const testTaskTitle = `Test Task ${Date.now()}`
+      const { data: createdTask, error: createError } = await supabase
+        .from('tasks')
+        .insert([{ title: testTaskTitle, is_completed: false }])
+        .select()
+        .single()
+
+      if (createError) {
+        log('2. CREATE Task', '❌ FAIL', createError.message)
+      } else {
+        log('2. CREATE Task', '✅ PASS', `Task created with ID: ${createdTask.id}`)
+        
+        // Test 3: READ - Fetch all tasks
+        log('3. READ Tasks', 'running', 'Fetching all tasks...')
+        const { data: allTasks, error: readError } = await supabase
+          .from('tasks')
+          .select('*')
+          
+        if (readError) {
+          log('3. READ Tasks', '❌ FAIL', readError.message)
+        } else {
+          log('3. READ Tasks', '✅ PASS', `Found ${allTasks.length} tasks`)
+        }
+
+        // Test 4: UPDATE - Toggle completion
+        log('4. UPDATE Task (Toggle)', 'running', 'Toggling task completion...')
+        const { error: updateError } = await supabase
+          .from('tasks')
+          .update({ is_completed: true })
+          .eq('id', createdTask.id)
+
+        if (updateError) {
+          log('4. UPDATE Task (Toggle)', '❌ FAIL', updateError.message)
+        } else {
+          log('4. UPDATE Task (Toggle)', '✅ PASS', 'Task marked as completed')
+        }
+
+        // Test 5: UPDATE - Edit title
+        log('5. UPDATE Task (Edit)', 'running', 'Editing task title...')
+        const newTitle = `${testTaskTitle} (Edited)`
+        const { error: editError } = await supabase
+          .from('tasks')
+          .update({ title: newTitle })
+          .eq('id', createdTask.id)
+
+        if (editError) {
+          log('5. UPDATE Task (Edit)', '❌ FAIL', editError.message)
+        } else {
+          log('5. UPDATE Task (Edit)', '✅ PASS', 'Task title updated')
+        }
+
+        // Test 6: DELETE - Remove task
+        log('6. DELETE Task', 'running', 'Deleting test task...')
+        const { error: deleteError } = await supabase
+          .from('tasks')
+          .delete()
+          .eq('id', createdTask.id)
+
+        if (deleteError) {
+          log('6. DELETE Task', '❌ FAIL', deleteError.message)
+        } else {
+          log('6. DELETE Task', '✅ PASS', 'Task deleted successfully')
+        }
+      }
+
+      // Test 7: Batch operations
+      log('7. Batch CREATE', 'running', 'Creating multiple tasks...')
+      const batchTitles = ['Batch Test 1', 'Batch Test 2', 'Batch Test 3']
+      const { data: batchCreated, error: batchError } = await supabase
+        .from('tasks')
+        .insert(batchTitles.map(title => ({ title, is_completed: false })))
+        .select()
+
+      if (batchError) {
+        log('7. Batch CREATE', '❌ FAIL', batchError.message)
+      } else {
+        log('7. Batch CREATE', '✅ PASS', `Created ${batchCreated.length} tasks`)
+        
+        // Clean up batch tasks
+        await supabase.from('tasks').delete().in('id', batchCreated.map(t => t.id))
+        log('7. Batch Cleanup', '✅ PASS', 'Cleaned up batch test tasks')
+      }
+
+      // Test 8: Filter queries
+      log('8. Filter Queries', 'running', 'Testing filtered queries...')
+      const { data: activeTasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('is_completed', false)
+      
+      const { data: completedTasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('is_completed', true)
+
+      log('8. Filter Queries', '✅ PASS', `Active: ${activeTasks.length}, Completed: ${completedTasks.length}`)
+
+    } catch (err) {
+      log('Test Execution', '❌ FAIL', err.message)
+    }
+
+    // Refresh tasks after tests
+    await fetchTasks()
+    
+    // Calculate summary
+    const passed = results.filter(r => r.status.includes('✅')).length
+    const failed = results.filter(r => r.status.includes('❌')).length
+    
+    setTestResults({
+      results,
+      summary: { passed, failed, total: results.length },
+      completedAt: new Date().toISOTime()
+    })
+    setRunningTests(false)
+  }
+
   // Filter tasks
   const filteredTasks = tasks.filter(task => {
     if (filter === 'active') return !task.is_completed
@@ -172,7 +306,66 @@ function App() {
       <header className="header">
         <h1>Task Manager</h1>
         <p>Manage your tasks with Supabase</p>
+        <button 
+          className="test-btn" 
+          onClick={runComprehensiveTests}
+          disabled={runningTests}
+          style={{
+            marginTop: '16px',
+            padding: '10px 20px',
+            background: runningTests ? '#9ca3af' : '#10b981',
+            color: 'white',
+            border: 'none',
+            borderRadius: '8px',
+            fontSize: '14px',
+            fontWeight: '500',
+            cursor: runningTests ? 'not-allowed' : 'pointer',
+            transition: 'background 0.2s'
+          }}
+        >
+          {runningTests ? '🔄 Running Tests...' : '🧪 Run Comprehensive Tests'}
+        </button>
       </header>
+
+      {testResults && (
+        <div className="test-results" style={{
+          background: '#fff',
+          borderRadius: '12px',
+          padding: '20px',
+          marginBottom: '24px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+        }}>
+          <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            📊 Test Results
+            <span style={{ 
+              background: testResults.summary.failed > 0 ? '#fee2e2' : '#d1fae5',
+              color: testResults.summary.failed > 0 ? '#dc2626' : '#059669',
+              padding: '4px 12px',
+              borderRadius: '20px',
+              fontSize: '14px'
+            }}>
+              {testResults.summary.passed}/{testResults.summary.total} Passed
+            </span>
+          </h3>
+          
+          {testResults.results.map((result, index) => (
+            <div key={index} style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              padding: '10px 0',
+              borderBottom: index < testResults.results.length - 1 ? '1px solid #e5e7eb' : 'none'
+            }}>
+              <span style={{ 
+                fontSize: '16px',
+                width: '24px'
+              }}>{result.status.includes('PASS') ? '✅' : result.status.includes('FAIL') ? '❌' : '⏳'}</span>
+              <span style={{ flex: 1, fontWeight: '500' }}>{result.test}</span>
+              <span style={{ color: '#6b7280', fontSize: '14px' }}>{result.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {error && (
         <div className="error-message">
